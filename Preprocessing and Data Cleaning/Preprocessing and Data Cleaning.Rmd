@@ -30,7 +30,7 @@ Data extraction from csv file. Unfortunately the research data is not publicly a
 data=read.csv("data.csv")
 ```
 
-Checking the variables' implicit constraints; defining ID, Animal and Shape; selection of the morphomethric descriptors of interest. Problematic observations are deleted after examination. As in the original study Max Intensity is swapped with Mean Intensity as well as Ngb 50 and Ngb 100. The synthetic dataset carries some excessively large values for Perimeter, which are cut to avoid confusion.
+Checking the variables' implicit constraints; defining ID, Animal and Shape; selection of the morphometric descriptors of interest. Problematic observations are deleted after examination. As in the original study Max Intensity is swapped with Mean Intensity as well as Ngb 50 and Ngb 100. The synthetic dataset carries some excessively large values for Perimeter, which are cut to avoid confusion.
 
 ```{r}
 Image=c(1:6,8:10,12,15:27)
@@ -104,7 +104,7 @@ data=data[-w,]
 
 In order to mitigate dependence and autocorrelation between observations due to pseudo-replication, aggregation is considered as a partial solution. This practice results in a loss of information within the groups (accepted, considering the aim of this study consisting in the analysis of the variability between groups) and in a loss in tests' statistical power (which, as confirmed in Aarts et al. 2014, converges to zero as the number of groups grows). In cluster analysis groups determined by combinations of Image, Shape and Layer are taken in consideration; in the inferential phase groups formed by combinations of ID, Shape and Layer are used to perform aggregation.
 
-Median is used on the vast majority of the variables because of its proprieties. Mean is considered as a better solution on those morphomethric descriptors which vary on a continuous scale with a domain defined in [0,1].
+Median is used on the vast majority of the variables because of its properties. Mean is considered as a better solution on those morphometric descriptors which vary on a continuous scale with a domain defined in [0,1].
 
 Centroids, intensity variables, Subject, Distance_from_outer_layer and Cell_class are deleted in the process.
 
