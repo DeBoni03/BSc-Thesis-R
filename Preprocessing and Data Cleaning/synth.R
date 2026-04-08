@@ -2,7 +2,7 @@ synth=function(df,context){
   library(MASS)
   nam=colnames(df)
   groups=split(df,df[context])
-  sinth_list=lapply(groups,function(group){
+  synth_list=lapply(groups,function(group){
     n=nrow(group)
     logn.col=c(5:8,10,14:15,28)
     poi.cols=c(16:27)
@@ -75,5 +75,5 @@ synth=function(df,context){
     synth[context]=group[1,context]
     return(synth)
   })
-  do.call(rbind,sinth_list)
+  do.call(rbind,synth_list)
 }
