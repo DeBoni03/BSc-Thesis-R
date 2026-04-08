@@ -1,0 +1,180 @@
+---
+title: "Preprocessing and Data Cleaning"
+author: "Filippo De Boni"
+date: "2026-03-31"
+output: html_document
+---
+
+# Preprocessing and Data Cleaning
+
+```{r}
+rm(list=ls())
+library(readr)
+library(dplyr)
+library(ggplot2)
+source("preproc.R")
+source("cutoff.R")
+source("synth.R")
+
+set.seed(111)
+```
+
+Data extraction from csv file. Unfortunately the research data is not publicly available; for this reason a synthetic dataset carrying part of the original distributional properties and correlation structure of the data has been generated to guarantee reproducibility. In order to limit the file size, only 1.000 observations for each combination of Image and Layer are taken in consideration.
+
+```{r}
+#data=synth(data,c("Image","Layer"))
+#data = data %>%
+#     group_by(Image, Layer) %>%
+#     slice_sample(n = 1000, replace = TRUE) %>% 
+#     ungroup()
+data=read.csv("data.csv")
+```
+
+Checking the variables' implicit constraints; defining ID, Animal and Shape; selection of the morphomethric descriptors of interest. Problematic observations are deleted after examination. As in the original study Max Intensity is swapped with Mean Intensity as well as Ngb 50 and Ngb 100. The synthetic dataset carries some excessively large values for Perimeter, which are cut to avoid confusion.
+
+```{r}
+Image=c(1:6,8:10,12,15:27)
+Animal=c("Giraffa camelopardalis","Giraffa camelopardalis","Equus caballus","Equus caballus","Equus caballus","Equus caballus","Ovis aries","Macaca mulatta","Macaca mulatta", "Tursiops truncatus","Grampus griseus","Balaenoptera physalus","Globicephala melas","Physeter macrocephalus","Balaenoptera physalus","Pan troglodytes","Pan troglodytes", "Hippopotamus amphibius","Hippopotamus amphibius","Elaphurus davidianus","Elaphurus davidianus","Giraffa camelopardalis","Giraffa camelopardalis")
+ID=c("71283","71283","20180619","20180620","20180620","20180620","20190602","NHP47","NHP47","201","228","297","281","SW1","208","70113","68010","20061229","71252","71284","71285","AB959","AB959")
+pre=preproc(data,Image,Animal = Animal,ID=ID,microglia = T,cut = F,tol=0.05)
+pre$Warnings
+nam=colnames(data)
+data=data[,c(2:16,23:28,17:22,29:30,33,32,31)]
+colnames(data)=nam[2:33]
+pre$Warnings
+pre=preproc(data,Image,Animal = Animal,ID=ID,microglia = T,cut = T,threshold = c(NA,2000),by="Perimeter",type=2,tol=0.05)
+pre$Warnings
+data=pre$Data
+```
+
+Barplot of the distribution of the observations between images and species, heatmap of the correlations between variables and scatter plot of the observations between InvAR and Convex Circularity highlighting Shapes.
+
+```{r}
+d=data.frame(table(data$Image))
+colnames(d)=c("Image","freq")
+d$freq=d$freq/nrow(data)
+ggplot(d,aes(x=Image,y=freq))+ 
+  geom_col(fill="blue",alpha=.8)+ 
+  theme_minimal()+ 
+  labs(title="Image Barplot",x="Image",y="Relative Frequencies",)+ 
+  theme(plot.title=element_text(size=11),plot.subtitle = element_text(size=9),axis.text = element_text(colour = "black"))+
+  scale_y_continuous(labels=scales::percent)
+d=data.frame(table(data$Animal))
+colnames(d)=c("Animal","freq")
+d$freq=d$freq/nrow(data)
+ggplot(d,aes(x=Animal,y=freq))+ 
+  geom_col(fill="blue",alpha=.8)+ 
+  theme_minimal()+ 
+  labs(title="Animal Barplot",x="Animal",y="Relative Frequencies",)+ 
+  theme(plot.title=element_text(size=11),plot.subtitle = element_text(size=9),axis.text = element_text(colour = "black"))+
+  scale_y_continuous(labels=scales::percent)
+heatmap(cor(data[,8:24],method = "spearman"))
+co=c(as.numeric(data$Shape)+rep(1,length(data$Shape)))
+plot(data$InvAR,data$ConvexCircularity,col=co,xlab="InvAR",ylab="Convex Circularity",main="InvAR vs. Convex Circularity",pch=".")
+abline(h=.85,col="red")
+abline(v=.75,col="red")
+legend(x = "bottomright",legend = c("Ellipsoid", "Round", "Pyramidal", "Complex","Microglia"),col = c(2:6),pch = 16,title = "Shape",bg = "white",cex = 0.8)
+```
+
+Visual inspections on 6 of the original images (carried out overlapping the centroids' scatter plots marked by approximate Major Axis Length values onto them) showed quite often the presence of False Positives. For this reason a threshold on Major Axis Length is determined by using a simplified version of Kneedle algorithm (Satopaa et al. 2011) on the Precision metric of the cells' detection method.
+
+```{r}
+#All the Images
+cutoff(2:7, c(.0413, 0.2005, 0.2605, 0.6168, 0.7209, 0.8118))
+#Image 4
+cutoff(2:7,c(.0227,.1548,.0284,.3455,.5417,.6304))
+#Image 9
+cutoff(2:7,c(.0842,.2234,.3581,.8199,.8783,.9518))
+#Image 12
+cutoff(3:7,c(.1111,.2,.3878,.6875,.7407))
+#Image 16
+cutoff(3:7,c(.45,.5,.7835,.8293,.9538))
+#Image 17
+cutoff(3:7,c(.2286,.5161,.5987,.5248,.5088))
+#Image 23
+cutoff(3:7,c(.3,.4583,.5657,.7604,.7018))
+```
+
+Since the overall suggested cutoff is located on the value of 5 microns, accordingly to what is showed in a half of the considered images (the remaining images show a suggested cutoff of 6 microns), a conservative threshold of 5 microns is considered a good trade-off choice in order to cut the most FP without damaging excessively the data set.
+
+```{r}
+w=which(data$MajorAxisLength<5)
+data=data[-w,]
+```
+
+In order to mitigate dependence and autocorrelation between observations due to pseudo-replication, aggregation is considered as a partial solution. This practice results in a loss of information within the groups (accepted, considering the aim of this study consisting in the analysis of the variability between groups) and in a loss in tests' statistical power (which, as confirmed in Aarts et al. 2014, converges to zero as the number of groups grows). In cluster analysis groups determined by combinations of Image, Shape and Layer are taken in consideration; in the inferential phase groups formed by combinations of ID, Shape and Layer are used to perform aggregation.
+
+Median is used on the vast majority of the variables because of its proprieties. Mean is considered as a better solution on those morphomethric descriptors which vary on a continuous scale with a domain defined in [0,1].
+
+Centroids, intensity variables, Subject, Distance_from_outer_layer and Cell_class are deleted in the process.
+
+```{r}
+#Image*Shape*Layer
+data2=cbind(data[,c(1:5,8:21)],NA)
+agg1=as.data.frame(matrix(NA,ncol=20))
+sha=levels(data$Shape)
+colnames(agg1)=c(colnames(data2)[1:19], "N")
+for (i in 1:23){
+  w=which(data2$Image==Image[i])
+  s=data2[w,]
+  for (j in 1:5){
+    s.s=subset(s,s$Shape==sha[j])
+    for (h in 1:6){
+      s.s.s=subset(s.s,s.s$Layer==h)
+      med=c()
+      for (k in c(6:12,18:19)){
+        med=c(med,median(as.numeric(s.s.s[,k])))
+      }
+      new=c(sha[j],h,Animal[i],ID[i],Image[i],as.numeric(med[1:7]),colMeans(s.s.s[,13:17]),as.numeric(med[8:9]),nrow(s.s.s))
+      agg1=rbind(agg1,new)
+    }
+  }
+}
+agg1=agg1[-1,]
+
+for (i in 1:5){
+  agg1[,i]=as.factor(agg1[,i])
+}
+for (i in 6:20){
+  agg1[,i]=as.numeric(agg1[,i])
+}
+
+
+write.csv(agg1,file = "agg1.csv")
+
+#ID*Shape*Layer
+data2=cbind(data[,c(1:5,8:21)],NA)
+agg2=as.data.frame(matrix(NA,ncol=19))
+sha=levels(data$Shape)
+colnames(agg2)=c(colnames(data2)[c(1:4,6:19)], "N")
+data2$ID=as.factor(data2$ID)
+lev=levels(data2$ID)
+for (element in lev){
+  an=data2$Animal[which(data2$ID==element)[1]]
+  w=which(data2$ID==element)
+  s=data2[w,]
+  for (j in 1:5){
+    s.s=subset(s,s$Shape==sha[j])
+    for (h in 1:6){
+      s.s.s=subset(s.s,s.s$Layer==h)
+      med=c()
+      for (k in c(6:12,18:19)){
+        med=c(med,median(as.numeric(s.s.s[,k])))
+      }
+      new=c(sha[j],h,an,element,as.numeric(med[1:7]),colMeans(s.s.s[,13:17]),as.numeric(med[8:9]),nrow(s.s.s))
+      agg2=rbind(agg2,new)
+    }
+  }
+}
+agg2=agg2[-1,]
+
+for (i in 1:4){
+  agg2[,i]=as.factor(agg2[,i])
+}
+for (i in 5:19){
+  agg2[,i]=as.numeric(agg2[,i])
+}
+
+
+write.csv(agg2,file = "agg2.csv")
+```
