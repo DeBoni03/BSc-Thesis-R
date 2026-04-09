@@ -1,0 +1,444 @@
+---
+title: "K-Means"
+author: "Filippo De Boni"
+date: "2026-04-08"
+output: html_document
+---
+
+# K-Means
+
+Cluster analysis is performed with a multimethod approach through partitional, hierarchical and density-based clustering methods.
+
+K-Means is implemented with a varying k parameter (to compare calculated clusters and ground truth in square contingency tables) and with nstart=100, in order to increase the chances of obtaining satisfactory partitions.
+
+```{r}
+rm(list=ls())
+
+library(readr)
+library(ggfortify)
+library(fpc)
+library(clusterCrit)
+library(cluster)
+source("km.ground.truth.R")
+
+agg1 <- read_csv("agg1.csv", col_types = cols(...1 = col_skip()))
+agg1$Shape=factor(agg1$Shape)
+agg1$Layer=factor(agg1$Layer)
+agg1$Animal=factor(agg1$Animal)
+agg1$ID=factor(agg1$ID)
+agg1$Image=factor(agg1$Image)
+
+set.seed(111)
+```
+
+Naming all the aggregated measures and marking them by sample size:
+
+-   N\<=5: \*\*\* (In the original study the measures obtained by too few observations were deleted)
+
+-   5\<N\<=10: \*\*
+
+-   10\<N\<=20: \*
+
+-   20\<N\<30: .
+
+```{r}
+Name=c(rep(NA,nrow(agg1)))
+for (i in 1:nrow(agg1)){
+  Name[i]=paste(agg1$Animal[i],"_",agg1$Image[i],"_",agg1$Shape[i],"_",agg1$Layer[i])
+}
+w=which(agg1$N<=5)
+for (i in 1:length(w)){
+  Name[w[i]]=paste(Name[w[i]],"***")
+}
+w=which(agg1$N>5 & agg1$N<=10)
+for (i in 1:length(w)){
+  Name[w[i]]=paste(Name[w[i]],"**")
+}
+w=which(agg1$N>10 & agg1$N<=20)
+for (i in 1:length(w)){
+  Name[w[i]]=paste(Name[w[i]],"*")
+}
+w=which(agg1$N>20 & agg1$N<30)
+for (i in 1:length(w)){
+  Name[w[i]]=paste(Name[w[i]],".")
+}
+```
+
+Defining some classifications of interest:
+
+-   **Cetacean**: do the observations come from a Cetacean's visual cortex?
+
+-   **Aquatic**: the observations belong to a Terrestrial, an Aquatic or a Hippopotamus amphibius mammal's visual cortex?
+
+-   **Diet/Binocularity**: which kind of diet/binocularity characterizes the observations' original subject?
+
+-   **Order**: to which phylogenetic order does the subject the observations come from belong?
+
+```{r}
+w=c(7,11:13)
+agg1=agg1[,-w]
+acq=c(rep(0,270),rep(1,180),rep(0,60),rep(2,60),rep(0,120))
+agg1=cbind(acq,agg1)
+colnames(agg1)=c("Aquatic",colnames(agg1)[2:17])
+agg1$Aquatic=factor(agg1$Aquatic,levels=c(0,1,2),labels=c("Terrestrial","Aquatic","Hippo"))
+cet=c(rep(0,270),rep(1,180),rep(0,240))
+agg1=cbind(cet,agg1)
+colnames(agg1)=c("Cetacean",colnames(agg1)[2:18])
+agg1$Cetacean=factor(agg1$Cetacean,levels=c(0,1),labels=c("No","Yes"))
+w1=which(agg1$Animal=="Tursiops truncatus" | agg1$Animal=="Grampus griseus" | agg1$Animal=="Physeter macrocephalus" | agg1$Animal=="Globicephala melas")
+w2=which(agg1$Animal=="Balaenoptera physalus")
+w3=which(agg1$Animal=="Elaphurus davidianus" | agg1$Animal=="Ovis aries" | agg1$Animal=="Hippopotamus amphibius" | agg1$Animal=="Giraffa camelopardalis")
+w4=which(agg1$Animal=="Equus caballus")
+w5=which(agg1$Animal=="Pan troglodytes" | agg1$Animal=="Macaca mulatta")
+ord=c(rep(NA,nrow(agg1)))
+ord[w1]=1
+ord[w2]=2
+ord[w3]=3
+ord[w4]=4
+ord[w5]=5
+agg1=cbind(ord,agg1)
+colnames(agg1)=c("Order",colnames(agg1)[2:19])
+agg1$Order=factor(agg1$Order,levels=c(1:5),labels=c("Odontocetes","Mysticetes","Artiodactyls","Perissodactyls","Primates"))
+diet=c(rep(0,210),rep(1,60),rep(2,180),rep(1,60),rep(0,180))
+agg1=cbind(diet,agg1)
+colnames(agg1)=c("Diet_Binocularity",colnames(agg1)[2:20])
+agg1$Diet_Binocularity=factor(agg1$Diet_Binocularity,levels=c(0,1,2),labels=c("A","B","C"))
+#A=herbivore-wide field, B=carnivore-lateral, C=omnivore-binocular
+
+agg1=agg1[,c(3:4,1:2,5,6:20)]
+row.names(agg1)=Name
+rm(Name)
+agg1=na.omit(agg1)
+agg1.s=na.omit(scale(agg1[,10:19])) #Scaling to avoid distortion due to variables' scales
+```
+
+## Global cluster analysis
+
+Each clustering is validated by some appropriate Clustering Validation Indexes (CVI):
+
+-   **Internal indexes**: used to evaluate separation between groups and compactness within groups. Average Silhouette, % of Negative Silhouettes, Calinski-Harabasz Index, Dunn Index (gD33 version, Arbelaitz et al. 2013);
+
+-   **External indexes**: used to evaluate agreement between calculated clusters and a ground truth. Normalized Variation of Information metric, Adjusted Rand Index, Normalized Chi index, P-value of Fisher's association test between clusters and ground truth (H0: absence of association).
+
+For each clustering, a biplot is also shown, in the space of the first two principal components is shown, with points colored according to both calculated clusters and ground truths.
+
+```{r}
+crit.2=km.ground.truth(agg1,2,"Cetacean")$CVI
+crit.3a=km.ground.truth(agg1,3,"Aquatic")$CVI
+crit.3b=km.ground.truth(agg1,3,"Diet_Binocularity")$CVI
+crit.5a=km.ground.truth(agg1,5,"Order")$CVI
+crit.5b=km.ground.truth(agg1,5,"Shape")$CVI
+crit.6=km.ground.truth(agg1,6,"Layer")$CVI
+nam=names(crit.2)
+crit.km=matrix(data=c(crit.2,crit.3a,crit.3b,crit.5a,crit.5b,crit.6),ncol=9,byrow = T)
+crit.km=cbind(c("km.2","km.3a","km.3b","km.5a","km.5b","km.6"),crit.km)
+colnames(crit.km)=c("Clustering",nam)
+```
+
+The original data showed much greater agreement between calculated clusters for Shape than for all the other ground truths. In order to uncover patterns hidden from the variability induced by Shape, separate clusterings were calculated for each different level of Shape and for each combination of Shape and cortical Layer. This approach is also shown in this Rmd, even if synthetic data shows good agreement between ground truths and calculated clusters for other known partitions too.
+
+## Ellipsoid
+
+```{r}
+s=subset(agg1,agg1$Shape=="Ellipsoid")
+crit.2.e=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.e=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.e=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.e=km.ground.truth(s,5,"Order")$CVI
+crit.6.e=km.ground.truth(s,6,"Layer")$CVI
+
+crit.km.e=matrix(data=c(crit.2.e,crit.3a.e,crit.3b.e,crit.5.e,crit.6.e),ncol=9,byrow = T)
+crit.km.e=cbind(c("km.2.e","km.3a.e","km.3b.e","km.5.e","km.6.e"),crit.km.e)
+colnames(crit.km.e)=c("Clustering",nam)
+```
+
+### Ellipsoid \* Layer
+
+```{r}
+s=subset(agg1,agg1$Shape=="Ellipsoid" & agg1$Layer==1)
+crit.2.e.1=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.e.1=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.e.1=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.e.1=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Ellipsoid" & agg1$Layer==2)
+crit.2.e.2=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.e.2=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.e.2=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.e.2=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Ellipsoid" & agg1$Layer==3)
+crit.2.e.3=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.e.3=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.e.3=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.e.3=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Ellipsoid" & agg1$Layer==4)
+crit.2.e.4=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.e.4=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.e.4=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.e.4=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Ellipsoid" & agg1$Layer==5)
+crit.2.e.5=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.e.5=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.e.5=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.e.5=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Ellipsoid" & agg1$Layer==6)
+crit.2.e.6=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.e.6=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.e.6=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.e.6=km.ground.truth(s,5,"Order")$CVI
+
+crit.km.e.lay=matrix(data=c(crit.2.e.1,crit.3a.e.1,crit.3b.e.1,crit.5.e.1,crit.2.e.2,crit.3a.e.2,crit.3b.e.2,crit.5.e.2,crit.2.e.3,crit.3a.e.3,crit.3b.e.3,crit.5.e.3,crit.2.e.4,crit.3a.e.4,crit.3b.e.4,crit.5.e.4,crit.2.e.5,crit.3a.e.5,crit.3b.e.5,crit.5.e.5,crit.2.e.6,crit.3a.e.6,crit.3b.e.6,crit.5.e.6),ncol=9,byrow = T)
+crit.km.e.lay=cbind(c("km.2.e.1","km.3a.e.1","km.3b.e.1","km.5.e.1","km.2.e.2","km.3a.e.2","km.3b.e.2","km.5.e.2","km.2.e.3","km.3a.e.3","km.3b.e.3","km.5.e.3","km.2.e.4","km.3a.e.4","km.3b.e.4","km.5.e.4","km.2.e.5","km.3a.e.5","km.3b.e.5","km.5.e.5","km.2.e.6","km.3a.e.6","km.3b.e.6","km.5.e.6"),crit.km.e.lay)
+colnames(crit.km.e.lay)=c("Clustering",nam)
+```
+
+## Round
+
+```{r}
+s=subset(agg1,agg1$Shape=="Round")
+crit.2.r=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.r=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.r=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.r=km.ground.truth(s,5,"Order")$CVI
+crit.6.r=km.ground.truth(s,6,"Layer")$CVI
+
+crit.km.r=matrix(data=c(crit.2.r,crit.3a.r,crit.3b.r,crit.5.r,crit.6.r),ncol=9,byrow = T)
+crit.km.r=cbind(c("km.2.r","km.3a.r","km.3b.r","km.5.r","km.6.r"),crit.km.r)
+colnames(crit.km.r)=c("Clustering",nam)
+```
+
+### Round \* Layer
+
+```{r}
+s=subset(agg1,agg1$Shape=="Round" & agg1$Layer==1)
+crit.2.r.1=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.r.1=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.r.1=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.r.1=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Round" & agg1$Layer==2)
+crit.2.r.2=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.r.2=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.r.2=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.r.2=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Round" & agg1$Layer==3)
+crit.2.r.3=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.r.3=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.r.3=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.r.3=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Round" & agg1$Layer==4)
+crit.2.r.4=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.r.4=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.r.4=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.r.4=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Round" & agg1$Layer==5)
+crit.2.r.5=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.r.5=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.r.5=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.r.5=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Round" & agg1$Layer==6)
+crit.2.r.6=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.r.6=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.r.6=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.r.6=km.ground.truth(s,5,"Order")$CVI
+
+crit.km.r.lay=matrix(data=c(crit.2.r.1,crit.3a.r.1,crit.3b.r.1,crit.5.r.1,crit.2.r.2,crit.3a.r.2,crit.3b.r.2,crit.5.r.2,crit.2.r.3,crit.3a.r.3,crit.3b.r.3,crit.5.r.3,crit.2.r.4,crit.3a.r.4,crit.3b.r.4,crit.5.r.4,crit.2.r.5,crit.3a.r.5,crit.3b.r.5,crit.5.r.5,crit.2.r.6,crit.3a.r.6,crit.3b.r.6,crit.5.r.6),ncol=9,byrow = T)
+crit.km.r.lay=cbind(c("km.2.r.1","km.3a.r.1","km.3b.r.1","km.5.r.1","km.2.r.2","km.3a.r.2","km.3b.r.2","km.5.r.2","km.2.r.3","km.3a.r.3","km.3b.r.3","km.5.r.3","km.2.r.4","km.3a.r.4","km.3b.r.4","km.5.r.4","km.2.r.5","km.3a.r.5","km.3b.r.5","km.5.r.5","km.2.r.6","km.3a.r.6","km.3b.r.6","km.5.r.6"),crit.km.r.lay)
+colnames(crit.km.r.lay)=c("Clustering",nam)
+```
+
+## Pyramidal
+
+```{r}
+s=subset(agg1,agg1$Shape=="Pyramidal")
+crit.2.p=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.p=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.p=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.p=km.ground.truth(s,5,"Order")$CVI
+crit.6.p=km.ground.truth(s,6,"Layer")$CVI
+
+crit.km.p=matrix(data=c(crit.2.p,crit.3a.p,crit.3b.p,crit.5.p,crit.6.p),ncol=9,byrow = T)
+crit.km.p=cbind(c("km.2.p","km.3a.p","km.3b.p","km.5.p","km.6.p"),crit.km.p)
+colnames(crit.km.p)=c("Clustering",nam)
+```
+
+### Pyramidal \* Layer
+
+```{r}
+s=subset(agg1,agg1$Shape=="Pyramidal" & agg1$Layer==1)
+crit.2.p.1=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.p.1=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.p.1=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.p.1=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Pyramidal" & agg1$Layer==2)
+crit.2.p.2=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.p.2=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.p.2=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.p.2=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Pyramidal" & agg1$Layer==3)
+crit.2.p.3=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.p.3=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.p.3=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.p.3=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Pyramidal" & agg1$Layer==4)
+crit.2.p.4=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.p.4=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.p.4=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.p.4=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Pyramidal" & agg1$Layer==5)
+crit.2.p.5=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.p.5=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.p.5=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.p.5=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Pyramidal" & agg1$Layer==6)
+crit.2.p.6=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.p.6=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.p.6=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.p.6=km.ground.truth(s,5,"Order")$CVI
+
+crit.km.p.lay=matrix(data=c(crit.2.p.1,crit.3a.p.1,crit.3b.p.1,crit.5.p.1,crit.2.p.2,crit.3a.p.2,crit.3b.p.2,crit.5.p.2,crit.2.p.3,crit.3a.p.3,crit.3b.p.3,crit.5.p.3,crit.2.p.4,crit.3a.p.4,crit.3b.p.4,crit.5.p.4,crit.2.p.5,crit.3a.p.5,crit.3b.p.5,crit.5.p.5,crit.2.p.6,crit.3a.p.6,crit.3b.p.6,crit.5.p.6),ncol=9,byrow = T)
+crit.km.p.lay=cbind(c("km.2.p.1","km.3a.p.1","km.3b.p.1","km.5.p.1","km.2.p.2","km.3a.p.2","km.3b.p.2","km.5.p.2","km.2.p.3","km.3a.p.3","km.3b.p.3","km.5.p.3","km.2.p.4","km.3a.p.4","km.3b.p.4","km.5.p.4","km.2.p.5","km.3a.p.5","km.3b.p.5","km.5.p.5","km.2.p.6","km.3a.p.6","km.3b.p.6","km.5.p.6"),crit.km.p.lay)
+colnames(crit.km.p.lay)=c("Clustering",nam)
+```
+
+## Complex
+
+```{r}
+s=subset(agg1,agg1$Shape=="Complex")
+crit.2.c=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.c=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.c=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.c=km.ground.truth(s,5,"Order")$CVI
+crit.6.c=km.ground.truth(s,6,"Layer")$CVI
+
+crit.km.c=matrix(data=c(crit.2.c,crit.3a.c,crit.3b.c,crit.5.c,crit.6.c),ncol=9,byrow = T)
+crit.km.c=cbind(c("km.2.c","km.3a.c","km.3b.c","km.5.c","km.6.c"),crit.km.c)
+colnames(crit.km.c)=c("Clustering",nam)
+```
+
+### Complex \* Layer
+
+```{r}
+s=subset(agg1,agg1$Shape=="Complex" & agg1$Layer==1)
+crit.2.c.1=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.c.1=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.c.1=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.c.1=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Complex" & agg1$Layer==2)
+crit.2.c.2=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.c.2=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.c.2=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.c.2=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Complex" & agg1$Layer==3)
+crit.2.c.3=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.c.3=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.c.3=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.c.3=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Complex" & agg1$Layer==4)
+crit.2.c.4=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.c.4=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.c.4=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.c.4=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Complex" & agg1$Layer==5)
+crit.2.c.5=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.c.5=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.c.5=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.c.5=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Complex" & agg1$Layer==6)
+crit.2.c.6=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.c.6=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.c.6=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.c.6=km.ground.truth(s,5,"Order")$CVI
+
+crit.km.c.lay=matrix(data=c(crit.2.c.1,crit.3a.c.1,crit.3b.c.1,crit.5.c.1,crit.2.c.2,crit.3a.c.2,crit.3b.c.2,crit.5.c.2,crit.2.c.3,crit.3a.c.3,crit.3b.c.3,crit.5.c.3,crit.2.c.4,crit.3a.c.4,crit.3b.c.4,crit.5.c.4,crit.2.c.5,crit.3a.c.5,crit.3b.c.5,crit.5.c.5,crit.2.c.6,crit.3a.c.6,crit.3b.c.6,crit.5.c.6),ncol=9,byrow = T)
+crit.km.c.lay=cbind(c("km.2.c.1","km.3a.c.1","km.3b.c.1","km.5.c.1","km.2.c.2","km.3a.c.2","km.3b.c.2","km.5.c.2","km.2.c.3","km.3a.c.3","km.3b.c.3","km.5.c.3","km.2.c.4","km.3a.c.4","km.3b.c.4","km.5.c.4","km.2.c.5","km.3a.c.5","km.3b.c.5","km.5.c.5","km.2.c.6","km.3a.c.6","km.3b.c.6","km.5.c.6"),crit.km.c.lay)
+colnames(crit.km.c.lay)=c("Clustering",nam)
+```
+
+## Microglia
+
+```{r}
+s=subset(agg1,agg1$Shape=="Microglia")
+crit.2.m=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.m=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.m=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.m=km.ground.truth(s,5,"Order")$CVI
+crit.6.m=km.ground.truth(s,6,"Layer")$CVI
+
+crit.km.m=matrix(data=c(crit.2.m,crit.3a.m,crit.3b.m,crit.5.m,crit.6.m),ncol=9,byrow = T)
+crit.km.m=cbind(c("km.2.m","km.3a.m","km.3b.m","km.5.m","km.6.m"),crit.km.m)
+colnames(crit.km.m)=c("Clustering",nam)
+```
+
+### Microglia \* Layer
+
+```{r}
+s=subset(agg1,agg1$Shape=="Microglia" & agg1$Layer==1)
+crit.2.m.1=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.m.1=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.m.1=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.m.1=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Microglia" & agg1$Layer==2)
+crit.2.m.2=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.m.2=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.m.2=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.m.2=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Microglia" & agg1$Layer==3)
+crit.2.m.3=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.m.3=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.m.3=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.m.3=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Microglia" & agg1$Layer==4)
+crit.2.m.4=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.m.4=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.m.4=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.m.4=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Microglia" & agg1$Layer==5)
+crit.2.m.5=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.m.5=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.m.5=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.m.5=km.ground.truth(s,5,"Order")$CVI
+
+s=subset(agg1,agg1$Shape=="Microglia" & agg1$Layer==6)
+crit.2.m.6=km.ground.truth(s,2,"Cetacean")$CVI
+crit.3a.m.6=km.ground.truth(s,3,"Aquatic")$CVI
+crit.3b.m.6=km.ground.truth(s,3,"Diet_Binocularity")$CVI
+crit.5.m.6=km.ground.truth(s,5,"Order")$CVI
+
+crit.km.m.lay=matrix(data=c(crit.2.m.1,crit.3a.m.1,crit.3b.m.1,crit.5.m.1,crit.2.m.2,crit.3a.m.2,crit.3b.m.2,crit.5.m.2,crit.2.m.3,crit.3a.m.3,crit.3b.m.3,crit.5.m.3,crit.2.m.4,crit.3a.m.4,crit.3b.m.4,crit.5.m.4,crit.2.m.5,crit.3a.m.5,crit.3b.m.5,crit.5.m.5,crit.2.m.6,crit.3a.m.6,crit.3b.m.6,crit.5.m.6),ncol=9,byrow = T)
+crit.km.m.lay=cbind(c("km.2.m.1","km.3a.m.1","km.3b.m.1","km.5.m.1","km.2.m.2","km.3a.m.2","km.3b.m.2","km.5.m.2","km.2.m.3","km.3a.m.3","km.3b.m.3","km.5.m.3","km.2.m.4","km.3a.m.4","km.3b.m.4","km.5.m.4","km.2.m.5","km.3a.m.5","km.3b.m.5","km.5.m.5","km.2.m.6","km.3a.m.6","km.3b.m.6","km.5.m.6"),crit.km.m.lay)
+colnames(crit.km.m.lay)=c("Clustering",nam)
+```
+
+## Output
+
+```{r}
+crit.km.sha=rbind(crit.km.e,crit.km.r,crit.km.p,crit.km.c,crit.km.m)
+crit.km.lay=rbind(crit.km.e.lay,crit.km.r.lay,crit.km.p.lay,crit.km.c.lay,crit.km.m.lay)
+
+#write.csv(crit.km,"crit.km.csv")
+#write.csv(crit.km.sha,"crit.km.sha.csv")
+#write.csv(crit.km.lay,"crit.km.lay.csv")
+```
