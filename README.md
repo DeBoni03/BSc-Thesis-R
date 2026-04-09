@@ -1,4 +1,4 @@
-# BCs-Thesis - R
+# BSc-Thesis - R
 ## Multidimensional approaches to the visual cortex's cytoarchitecture analysis in select mammals
 
 Morphometric descriptors of visual cortex cells were recorded across twenty-three histological images from eighteen mammals, using an automated cell detection program. The descriptors span three informational domains: size, regularity, and neighbourhood density. This study aims to assess their characteristics in order to understand how evolutionary adaptation has shaped them, with regard to the species of origin and their phylogenetic relationships, through multivariate approaches such as cluster analysis and PERMANOVA. The thesis also provides an in-depth discussion of the data quality issues encountered, with particular attention to the significant challenge that preprocessing and data cleaning represent in this type of analysis. 
