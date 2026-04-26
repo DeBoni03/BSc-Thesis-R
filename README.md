@@ -32,7 +32,16 @@ In this repository, the R code used in the study is shared alongside a synthetic
 - Applying Permutational Multivariate Analysis of Variance to rigorously test the statistical significance of the identified groups across different mammalian species and phylogenetic relationships.
 
 ---
+### Software & Core Libraries
 
+The analytical pipeline was developed in **R**, leveraging key packages to handle multidimensional data, complex clustering, and rigorous statistical validation:
+
+* **Data Manipulation & Visualization:** `tidyverse` (primarily `dplyr` and `ggplot2`) alongside `ggfortify` for handling and plotting multidimensional structures.
+* **Clustering & Validation:** `dbscan` for density-based spatial clustering, supported by `fpc` and `clusterCrit` to compute complex Cluster Validity Indices (CVIs) and evaluate algorithmic stability.
+* **Multivariate Statistics:** `GUniFrac` and `vegan` (crucial for executing PERMANOVA and testing multivariate dispersions), combined with `mixedCCA` for Canonical Correlation Analysis.
+* **Statistical Testing:** `MVN` and `lme4` to rigorously verify underlying statistical assumptions (e.g., multivariate normality) and compute correlation coefficients.
+
+---
 ### Resources
 
 - **Full Dissertation:** The complete theoretical background, methodology, and detailed discussion of the results can be accessed here: [https://hdl.handle.net/20.500.12608/106062](https://hdl.handle.net/20.500.12608/106062)
