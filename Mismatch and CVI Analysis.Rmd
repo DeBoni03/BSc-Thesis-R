@@ -1,0 +1,253 @@
+---
+title: "Mismatch and CVI Analysis"
+author: "Filippo De Boni"
+date: "2026-05-17"
+output: html_document
+---
+
+# Mismatch and CVI Analysis
+
+Diagnostic check of the clustering phase. Mismatches between ground truths and clusterings are evaluated with regard to both their relative frequencies and correlations with context variables. The first kind of analysis aims to identify critical subjects for whom the classification often appears problematic, in order to spot patterns of dissimilarities between subjects of the same order (in the original study, for example, chimps and some of the artiodactyls often got classified as cetaceans, rather than terrestrial mammals). The second kind of analysis aims to identify potential correlations between mismatches and context variables, to verify which features support similarities between different cellular populations; or to verify the absence of these kinds of effects, implying a general similarity between cellular populations coming from different subjects not affected by their specific features. An analysis similar to the latter is proposed for the clusters' validity indices, to inspect how the clusterings' quality changes based on the various populations' features and the context of the clusterings themselves.
+
+```{r}
+rm(list=ls())
+library(readr)
+library(dbscan)
+source("mismatch.R")
+library(tidyr)
+library(devtools)
+install_github("davnovak/Jacc")
+library(Jacc)
+library(dplyr)
+library(mixedCCA)
+
+agg1 <- read_csv("agg1.csv", col_types = cols(...1 = col_skip()))
+agg1$Shape=factor(agg1$Shape)
+agg1$Layer=factor(agg1$Layer)
+agg1$Animal=factor(agg1$Animal)
+agg1$ID=factor(agg1$ID)
+agg1$Image=factor(agg1$Image)
+trace_hc <- read_csv("trace.hc.csv", col_types = cols(`1` = col_skip(), ...1 = col_skip()), skip = 1)
+colnames(trace_hc)=c("Distance","Linkage")
+trace_db <- read_csv("trace.db.csv", col_types = cols(`1` = col_skip(), ...1 = col_skip()), skip = 1)
+colnames(trace_db)=c("Epsilon","MinPoints")
+
+set.seed(111)
+```
+
+Naming all the aggregated measures and marking them by sample size:
+
+-   N\<=5: \*\*\* (In the original study the measures obtained by too few observations were deleted)
+
+-   5\<N\<=10: \*\*
+
+-   10\<N\<=20: \*
+
+-   20\<N\<30: .
+
+```{r}
+Name=c(rep(NA,nrow(agg1)))
+for (i in 1:nrow(agg1)){
+  Name[i]=paste(agg1$Animal[i],"_",agg1$Image[i],"_",agg1$Shape[i],"_",agg1$Layer[i])
+}
+w=which(agg1$N<=5)
+for (i in 1:length(w)){
+  Name[w[i]]=paste(Name[w[i]],"***")
+}
+w=which(agg1$N>5 & agg1$N<=10)
+for (i in 1:length(w)){
+  Name[w[i]]=paste(Name[w[i]],"**")
+}
+w=which(agg1$N>10 & agg1$N<=20)
+for (i in 1:length(w)){
+  Name[w[i]]=paste(Name[w[i]],"*")
+}
+w=which(agg1$N>20 & agg1$N<30)
+for (i in 1:length(w)){
+  Name[w[i]]=paste(Name[w[i]],".")
+}
+```
+
+Defining some classifications of interest:
+
+-   **Cetacean**: do the observations come from a Cetacean's visual cortex?
+
+-   **Aquatic**: the observations belong to a Terrestrial, an Aquatic or a Hippopotamus amphibius mammal's visual cortex?
+
+-   **Diet/Binocularity**: which kind of diet/binocularity characterizes the observations' original subject?
+
+-   **Order**: to which phylogenetic order does the subject the observations come from belong?
+
+```{r}
+w=c(7,11:13)
+agg1=agg1[,-w]
+acq=c(rep(0,270),rep(1,180),rep(0,60),rep(2,60),rep(0,120))
+agg1=cbind(acq,agg1)
+colnames(agg1)=c("Aquatic",colnames(agg1)[2:17])
+agg1$Aquatic=factor(agg1$Aquatic,levels=c(0,1,2),labels=c("Terrestrial","Aquatic","Hippo"))
+cet=c(rep(0,270),rep(1,180),rep(0,240))
+agg1=cbind(cet,agg1)
+colnames(agg1)=c("Cetacean",colnames(agg1)[2:18])
+agg1$Cetacean=factor(agg1$Cetacean,levels=c(0,1),labels=c("No","Yes"))
+w1=which(agg1$Animal=="Tursiops truncatus" | agg1$Animal=="Grampus griseus" | agg1$Animal=="Physeter macrocephalus" | agg1$Animal=="Globicephala melas")
+w2=which(agg1$Animal=="Balaenoptera physalus")
+w3=which(agg1$Animal=="Elaphurus davidianus" | agg1$Animal=="Ovis aries" | agg1$Animal=="Hippopotamus amphibius" | agg1$Animal=="Giraffa camelopardalis")
+w4=which(agg1$Animal=="Equus caballus")
+w5=which(agg1$Animal=="Pan troglodytes" | agg1$Animal=="Macaca mulatta")
+ord=c(rep(NA,nrow(agg1)))
+ord[w1]=1
+ord[w2]=2
+ord[w3]=3
+ord[w4]=4
+ord[w5]=5
+agg1=cbind(ord,agg1)
+colnames(agg1)=c("Order",colnames(agg1)[2:19])
+agg1$Order=factor(agg1$Order,levels=c(1:5),labels=c("Odontocetes","Mysticetes","Artiodactyls","Perissodactyls","Primates"))
+diet=c(rep(0,210),rep(1,60),rep(2,180),rep(1,60),rep(0,180))
+agg1=cbind(diet,agg1)
+colnames(agg1)=c("Diet_Binocularity",colnames(agg1)[2:20])
+agg1$Diet_Binocularity=factor(agg1$Diet_Binocularity,levels=c(0,1,2),labels=c("A","B","C"))
+#A=herbivore-wide field, B=carnivore-lateral, C=omnivore-binocular
+
+agg1=agg1[,c(3:4,1:2,5,6:20)]
+row.names(agg1)=Name
+rm(Name)
+means=na.omit(agg1)
+```
+
+## Mismatches and CVIs' datasets
+
+Creation of the mismathes datasets.
+
+```{r}
+mismatch.2=mismatch(2,methods=trace_hc$Distance,linkages=trace_hc$Linkage,eps=trace_db$Epsilon,mins=trace_db$MinPoints,means=means)
+mismatch.3a=mismatch(3,methods=trace_hc$Distance,linkages=trace_hc$Linkage,eps=trace_db$Epsilon,mins=trace_db$MinPoints,means=means,a=T)
+mismatch.3b=mismatch(3,methods=trace_hc$Distance,linkages=trace_hc$Linkage,eps=trace_db$Epsilon,mins=trace_db$MinPoints,means=means,a=F)
+mismatch.5=mismatch(5,methods=trace_hc$Distance,linkages=trace_hc$Linkage,eps=trace_db$Epsilon,mins=trace_db$MinPoints,means=means)
+```
+
+Creation of the CVIs' datasets.
+
+```{r}
+crit.gen=rbind(read_csv("crit.km.csv", col_types = cols(...1 = col_skip())),read_csv("crit.hc.csv", col_types = cols(...1 = col_skip())),read_csv("crit.db.csv", col_types = cols(...1 = col_skip())))
+crit.gen=rbind(crit.gen,read_csv("crit.km.sha.csv", col_types = cols(...1 = col_skip())),read_csv("crit.hc.sha.csv", col_types = cols(...1 = col_skip())),read_csv("crit.db.sha.csv", col_types = cols(...1 = col_skip())))
+crit.gen=rbind(crit.gen,read_csv("crit.km.lay.csv", col_types = cols(...1 = col_skip())),read_csv("crit.hc.lay.csv", col_types = cols(...1 = col_skip())),read_csv("crit.db.lay.csv", col_types = cols(...1 = col_skip())))
+
+crit.gen=cbind(crit.gen[,1],c(rep("km",6),rep("hc",6),rep("db",6),rep("km",25),rep("hc",25),rep("db",25),rep("km",120),rep("hc",120),rep("db",120)),c(rep("Global",18),rep("Shape",75),rep("Shape*Layer",360)),c(rep(c("Cetacean","Aquatic","Diet/Binocularity","Order","Shape","Layer"),3),rep(c("Cetacean","Aquatic","Diet/Binocularity","Order","Layer"),15),rep(c("Cetacean","Aquatic","Diet/Binocularity","Order"),90)),c(rep("No Shape",18),rep(c(rep("Ellipsoid",5),rep("Round",5),rep("Pyramidal",5),rep("Complex",5),rep("Microglia",5)),3),rep(c(rep("Ellipsoid",24),rep("Round",24),rep("Pyramidal",24),rep("Complex",24),rep("Microglia",24)),3)),c(rep(0,93),rep(c(rep(1,4),rep(2,4),rep(3,4),rep(4,4),rep(5,4),rep(6,4)),15)),crit.gen[,2:10])
+colnames(crit.gen)=c("Clustering","Type","Focus","Ground truth","Shape","Layer",colnames(crit.gen)[7:15])
+```
+
+## Mixed CCA
+
+Sparse Semiparametric CCA for Mixed Data between context variables and mismatches/CVIs. For every dataset created in the previous section are shown:
+
+-   the frequency of the classification as Noise for every image;
+
+-   the first canonical correlation calculated;
+
+-   the weights for the creation of the canonical variables, for interpretation;
+
+-   a heatmap of the Kendall correlation matrix (red means high positive correlations).
+
+```{r}
+w=which(grepl("Noise",names(mismatch.2$Weight)))
+mismatch.2$Weight[w]#Noise frequencies
+w=which(mismatch.2$Weight<=.2)#Exluding infrequent mismatches for parsimony
+mism=mismatch.2$Errors[,-(w+c(rep(4,length(w))))]
+mism=dplyr::select(mismatch.2$Errors,!contains("Noise"))
+mism=na.omit(mism)
+
+d=model.matrix(~Shape-1,mism)
+d=cbind(d,model.matrix(~Layer-1,mism))
+d=cbind(d,model.matrix(~Type-1,mism))
+d=d[,-c(2,6,14)]
+d
+mism=model.matrix(~.-1,mism[,5:ncol(mism)],na.action=na.pass)
+cc=mixedCCA(X1=d,X2=mism,type1="binary",type2 = "binary",BICtype = 1)
+cc$cancor
+cc$w1
+cc$w2
+heatmap(cc$KendallR[1:11,12:(11+ncol(mism))],col=colorRampPalette(c("blue","beige","#FF2400"))(15),scale="none",margin=c(10,10))
+```
+
+```{r}
+w=which(grepl("Noise",names(mismatch.3a$Weight)))
+mismatch.3a$Weight[w]
+w=which(mismatch.3a$Weight<=.2)
+mism=mismatch.3a$Errors[,-(w+c(rep(4,length(w))))]
+mism=dplyr::select(mismatch.3a$Errors,!contains("Noise"))
+mism=na.omit(mism)
+
+d=model.matrix(~Shape-1,mism)
+d=cbind(d,model.matrix(~Layer-1,mism))
+d=cbind(d,model.matrix(~Type-1,mism))
+d=d[,-c(2,6,14)]
+d
+mism=model.matrix(~.-1,mism[,5:ncol(mism)],na.action=na.pass)
+cc=mixedCCA(X1=d,X2=mism,type1="binary",type2 = "binary",BICtype = 1)
+cc$cancor
+cc$w1
+cc$w2
+heatmap(cc$KendallR[1:11,12:(11+ncol(mism))],col=colorRampPalette(c("blue","beige","#FF2400"))(15),scale="none",margin=c(10,10))
+```
+
+```{r}
+w=which(grepl("Noise",names(mismatch.3b$Weight)))
+mismatch.3b$Weight[w]
+w=which(mismatch.3b$Weight<=.2)
+mism=mismatch.3b$Errors[,-(w+c(rep(4,length(w))))]
+mism=dplyr::select(mismatch.3b$Errors,!contains("Noise"))
+mism=na.omit(mism)
+
+d=model.matrix(~Shape-1,mism)
+d=cbind(d,model.matrix(~Layer-1,mism))
+d=cbind(d,model.matrix(~Type-1,mism))
+d=d[,-c(2,6,13)]
+d
+mism=model.matrix(~.-1,mism[,5:ncol(mism)],na.action=na.pass)
+cc=mixedCCA(X1=d,X2=mism,type1="binary",type2 = "binary",BICtype = 1)
+cc$cancor
+cc$w1
+cc$w2
+heatmap(cc$KendallR[1:11,12:(11+ncol(mism))],col=colorRampPalette(c("blue","beige","#FF2400"))(15),scale="none",margin=c(10,10))
+```
+
+```{r}
+w=which(mismatch.5$Weight<=.2)
+mism=mismatch.5$Errors[,-(w+c(rep(4,length(w))))]
+mism=na.omit(mism)
+
+d=model.matrix(~Shape-1,mism)
+d=cbind(d,model.matrix(~Layer-1,mism))
+d=cbind(d,model.matrix(~Type-1,mism))
+d=d[,-c(2,6,12,14)]
+d
+mism=model.matrix(~.-1,mism[,5:ncol(mism)],na.action=na.pass)
+cc=mixedCCA(X1=d,X2=mism,type1="binary",type2 = "binary",BICtype = 1)
+cc$cancor
+cc$w1
+cc$w2
+heatmap(cc$KendallR[1:10,11:(10+ncol(mism))],col=colorRampPalette(c("blue","beige","#FF2400"))(15),scale="none",margin=c(10,10))
+```
+
+In this case the Kendall correlation matrix is modified for interpretative purposes. Red means desirable values for CVIs when the corresponding feature is present; blue means undesirable values.
+
+```{r}
+for (i in 2:6){
+  crit.gen[,i]=as.factor(crit.gen[,i])
+}
+crit.gen=na.omit(crit.gen)
+d=model.matrix(~Shape-1,crit.gen)
+d=cbind(d,model.matrix(~Layer-1,crit.gen))
+d=cbind(d,model.matrix(~Type-1,crit.gen))
+d=cbind(d,model.matrix(~Focus-1,crit.gen))
+d=cbind(d,model.matrix(~`Ground truth`-1,crit.gen))
+d=d[,-c(4,7,16:17,23)]
+cc=mixedCCA(X1=d,X2=crit.gen[,c(8:9,12:15)],type1="binary",type2 = "continuous",BICtype = 1)
+cc$cancor
+cc$w1
+cc$w2
+a=cc$KendallR[1:20,21:26]
+a[,c(2:3,6)]=a[,c(2:3,6)]*-1
+heatmap(a,col=colorRampPalette(c("blue","beige","#FF2400"))(15),scale="none",margin=c(10,10))
+```
